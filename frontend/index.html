@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Water Hydration Tracker</title>
+  <script src="./node_modules/vue/dist/vue.global.js"></script>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #f2faff;
+      margin: 40px auto;
+      padding: 0 20px;
+      max-width: 800px;
+      color: #333;
+    }
+  
+    h1 {
+      text-align: center;
+      color: #0077cc;
+      margin-bottom: 30px;
+    }
+  
+    input, button {
+      font-size: 1rem;
+      padding: 8px 10px;
+      margin: 5px 0;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+    }
+  
+    input[type="date"],
+    input[type="time"],
+    input[type="number"] {
+      width: calc(33.33% - 12px);
+      margin-right: 8px;
+    }
+  
+    button {
+      background-color: #0077cc;
+      color: white;
+      cursor: pointer;
+      transition: background 0.3s ease;
+    }
+  
+    button:hover {
+      background-color: #005fa3;
+    }
+  
+    .plan {
+      background: white;
+      border-left: 5px solid #0077cc;
+      padding: 15px;
+      margin: 10px 0;
+      border-radius: 6px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+  
+    .plan p {
+      margin: 0 0 10px;
+    }
+  
+    .plan button {
+      margin-right: 10px;
+      background: #ff7675;
+    }
+  
+    .plan button:hover {
+      background: #e84343;
+    }
+  
+    h2, h3 {
+      color: #333;
+      margin-top: 25px;
+    }
+  
+    .message {
+      background: #dff9fb;
+      padding: 10px;
+      border-left: 4px solid #00cec9;
+      margin-top: 15px;
+      border-radius: 4px;
+    }
+  </style>
+  
+</head>
+<body>
+  <div id="app">
+    <h1>Water Hydration Tracker</h1>
+    
+    <div>
+      <h2>{{ editing ? 'Edit Plan' : 'New Plan' }}</h2>
+    
+      <input type="date" v-model="currentPlan.start_date" placeholder="Start Date">
+      <input type="date" v-model="currentPlan.end_date" placeholder="End Date">
+      <input type="number" v-model.number="currentPlan.daily_goal" min="1" placeholder="Glasses per Day">
+    
+      <div v-for="(time, index) in currentPlan.schedule" :key="index">
+        <input type="time" v-model="currentPlan.schedule[index]">
+        <button @click="removeTime(index)">Remove</button>
+      </div>
+      <button @click="addTime">Add Time</button>
+    
+      <br><br>
+      <button @click="savePlan">
+        {{ editing ? 'Update Plan' : 'Save Plan' }}
+      </button>
+      <button v-if="editing" @click="cancelEdit">Cancel</button>
+    </div>
+    
+    <div>
+        <h2>Filter Plans by Date</h2>
+        <input type="date" v-model="filterDate">
+        <button @click="loadPlansByDate">Filter</button>
+        <button @click="loadAllPlans">Show All</button>
+    </div>      
+
+    <p v-if="message">{{ message }}</p>
+    
+    <div>
+      <h2>Your Plans</h2>
+      <div v-for="plan in plans" :key="plan.id" class="plan">
+        <p>From {{ plan.start_date }} to {{ plan.end_date }} – Goal: {{ plan.daily_goal }} glasses/day</p>
+        <button @click="editPlan(plan)">Edit</button>
+        <button @click="deletePlan(plan)">Delete</button>
+      </div>
+    </div>
+    
+</div>
+  <script>
+    const { createApp } = Vue;
+    createApp({
+      data() {
+        return {
+          plans: [],
+          filterDate: '',
+          reminderTimers: [],
+          currentPlan: {
+            id: null,
+            start_date: '',
+            end_date: '',
+            daily_goal: 8,
+            schedule: []
+          },
+          editing: false,
+          message: ''
+        }
+      },
+      created() {
+        if (Notification.permission !== 'granted') {
+          Notification.requestPermission().then(permission => {
+            if (permission !== 'granted') {
+              this.message = 'Enable notification permissions for reminders to work.';
+            }
+          });
+        }
+        this.loadPlans();
+      },
+      methods: {
+        loadPlans() {
+          fetch('http://localhost:5000/api/plans')
+            .then(response => response.json())
+            .then(data => {
+              this.plans = data;
+              // Schedule reminders for all plans (optional)
+              data.forEach(plan => this.scheduleReminders(plan));
+            })
+            .catch(error => {
+              console.error('Error:', error);
+              this.message = 'Failed to load plans.';
+            });
+        },
+        savePlan() {
+            const url = this.editing
+                ? `http://localhost:5000/api/plans/${this.currentPlan.id}`
+                : 'http://localhost:5000/api/plans';
+            const method = this.editing ? 'PUT' : 'POST';
+            fetch(url, {
+                method: method,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(this.currentPlan)
+            })
+                .then(response => {
+                if (!response.ok) throw new Error('Failed to save plan');
+                return response.json();
+                })
+                .then(data => {
+                this.loadPlans();
+                this.resetForm();
+                this.message = 'Plan saved!';
+                // Schedule reminders for the saved plan
+                this.scheduleReminders(data); // Use data from the response, which may include the updated plan
+                })
+                .catch(error => {
+                console.error('Error:', error);
+                this.message = 'Failed to save plan.';
+                });
+        },
+        editPlan(plan) {
+          this.currentPlan = { ...plan };
+          this.editing = true;
+        },
+        deletePlan(plan) {
+          if (confirm('Are you sure you want to delete this plan?')) {
+            fetch(`http://localhost:5000/api/plans/${plan.id}`, {
+              method: 'DELETE'
+            })
+              .then(response => {
+                if (response.ok) {
+                  this.loadPlans();
+                  this.message = 'Plan deleted!';
+                }
+              })
+              .catch(error => {
+                console.error('Error:', error);
+                this.message = 'Failed to delete plan.';
+              });
+          }
+        },
+        cancelEdit() {
+          this.resetForm();
+        },
+        resetForm() {
+          this.currentPlan = {
+            id: null,
+            start_date: '',
+            end_date: '',
+            daily_goal: 8,
+            schedule: []
+          };
+          this.editing = false;
+        },
+        loadPlansByDate() {
+        if (!this.filterDate) return;
+        fetch(`http://localhost:5000/api/plans/date/${this.filterDate}`)
+        .then(response => response.json())
+        .then(data => {
+            this.plans = data;
+            this.message = `Showing plans for ${this.filterDate}`;
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            this.message = 'Failed to load plans.';
+        });
+        },
+        loadAllPlans() {
+            this.filterDate = '';
+            this.loadPlans();
+        },
+        addTime() {
+            this.currentPlan.schedule.push('');
+        },
+        removeTime(index) {
+            this.currentPlan.schedule.splice(index, 1);
+        },
+        clearReminders() {
+          this.reminderTimers.forEach(timer => clearTimeout(timer));
+          this.reminderTimers = [];
+        },
+        scheduleReminders(plan) {
+          this.clearReminders(); // Clear old timers before scheduling new ones
+          plan.schedule.forEach(time => {
+            if (!time || !time.includes(':')) return; // Skip blank/invalid times
+            const now = new Date();
+            const [hours, minutes] = time.split(':').map(Number);
+            const reminderTime = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, 0);
+            console.log('Now:', now, 'ReminderTime:', reminderTime);
+            if (reminderTime > now && Notification.permission === 'granted') {
+              const timer = setTimeout(() => {
+                new Notification('Time to drink water!');
+              }, reminderTime - now);
+              this.reminderTimers.push(timer);
+            }
+          });
+        },
+      }
+    }).mount('#app');
+
+  </script>
+</body>
+</html>
